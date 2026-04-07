@@ -28,6 +28,7 @@ import {
   amountToInteger,
   hasFieldsChanged,
   integerToAmount,
+  looselyParseAmount,
 } from '#shared/util';
 import type {
   AccountEntity,
@@ -507,32 +508,144 @@ async function normalizeTransactions(
   return { normalized, payeesToCreate };
 }
 
+type NoteFormatEntry = { id: string; pattern: string };
+type NoteFormatMatchResult = {
+  date?: string;
+  payeeName?: string;
+  imported_payee?: string;
+  amount?: string;
+  notes?: string;
+};
+
+// Longer tokens must come before shorter ambiguous prefixes (%dd% before %d%, etc.)
+const NOTE_FORMAT_PLACEHOLDERS: Record<string, string> = {
+  '%yyyy%': '(?<yyyy>\\d{4})',
+  '%yy%': '(?<yy>\\d{2})',
+  '%dd%': '(?<dd>\\d{2})',
+  '%d%': '(?<d>\\d{1,2})',
+  '%mm%': '(?<mm>\\d{2})',
+  '%m%': '(?<m>\\d{1,2})',
+  '%a%': '(?<a>-?[\\d.,]+)',
+  '%pp%': '(?<pp>.+)',
+  '%p%': '(?<p>.+)',
+  '%n%': '(?<n>.+)',
+};
+
+const NOTE_FORMAT_TOKEN_REGEX =
+  /(%yyyy%|%yy%|%dd%|%d%|%mm%|%m%|%a%|%pp%|%p%|%n%)/g;
+
+function compileNoteFormats(formats: NoteFormatEntry[]): RegExp[] {
+  return formats.flatMap(({ pattern }) => {
+    if (!pattern.trim()) return [];
+    const rebuiltRegex = pattern.replace(
+      NOTE_FORMAT_TOKEN_REGEX,
+      match => NOTE_FORMAT_PLACEHOLDERS[match],
+    );
+    try {
+      return [new RegExp(`^${rebuiltRegex}$`)];
+    } catch {
+      return [];
+    }
+  });
+}
+
+function applyNoteFormats(
+  rawNote: string | null | undefined,
+  originalDate: string,
+  compiledFormats: RegExp[],
+): NoteFormatMatchResult | null {
+  if (!rawNote || compiledFormats.length === 0) return null;
+
+  for (const regex of compiledFormats) {
+    const m = rawNote.match(regex);
+    if (!m?.groups) continue;
+
+    const groups = m.groups;
+    const result: NoteFormatMatchResult = {};
+
+    const hasYear4 = 'yyyy' in groups;
+    const hasYear2 = 'yy' in groups;
+    const hasMonth2 = 'mm' in groups;
+    const hasMonth1 = 'm' in groups;
+    const hasDay2 = 'dd' in groups;
+    const hasDay1 = 'd' in groups;
+
+    if (hasYear4 || hasYear2 || hasMonth2 || hasMonth1 || hasDay2 || hasDay1) {
+      const [origYear, origMonth, origDay] = originalDate.split('-');
+      let year: string;
+      if (hasYear4) {
+        year = String(groups.yyyy).padStart(4, '0');
+      } else if (hasYear2) {
+        year = origYear.slice(0, 2) + String(groups.yy).padStart(2, '0');
+      } else {
+        year = origYear;
+      }
+      const month = hasMonth2
+        ? String(groups.mm).padStart(2, '0')
+        : hasMonth1
+          ? String(groups.m).padStart(2, '0')
+          : origMonth;
+      const day = hasDay2
+        ? String(groups.dd).padStart(2, '0')
+        : hasDay1
+          ? String(groups.d).padStart(2, '0')
+          : origDay;
+      result.date = `${year}-${month}-${day}`;
+    }
+
+    if ('p' in groups && groups.p) result.payeeName = groups.p.trim();
+    if ('pp' in groups && groups.pp) result.imported_payee = groups.pp.trim();
+    if ('a' in groups && groups.a) result.amount = groups.a;
+    if ('n' in groups && groups.n) result.notes = groups.n.trim();
+
+    return result;
+  }
+
+  return null;
+}
+
 async function normalizeBankSyncTransactions(transactions, acctId) {
   const payeesToCreate = new Map();
 
-  const [customMappingsRaw, importPending, importNotes] = await Promise.all([
-    aqlQuery(
-      q('preferences')
-        .filter({ id: `custom-sync-mappings-${acctId}` })
-        .select('value'),
-    ).then(data => data?.data?.[0]?.value),
-    aqlQuery(
-      q('preferences')
-        .filter({ id: `sync-import-pending-${acctId}` })
-        .select('value'),
-    ).then(data => String(data?.data?.[0]?.value ?? 'true') === 'true'),
-    aqlQuery(
-      q('preferences')
-        .filter({ id: `sync-import-notes-${acctId}` })
-        .select('value'),
-    ).then(data => String(data?.data?.[0]?.value ?? 'true') === 'true'),
-  ]);
+  const [customMappingsRaw, importPending, importNotes, noteFormatsRaw] =
+    await Promise.all([
+      aqlQuery(
+        q('preferences')
+          .filter({ id: `custom-sync-mappings-${acctId}` })
+          .select('value'),
+      ).then(data => data?.data?.[0]?.value),
+      aqlQuery(
+        q('preferences')
+          .filter({ id: `sync-import-pending-${acctId}` })
+          .select('value'),
+      ).then(data => String(data?.data?.[0]?.value ?? 'true') === 'true'),
+      aqlQuery(
+        q('preferences')
+          .filter({ id: `sync-import-notes-${acctId}` })
+          .select('value'),
+      ).then(data => String(data?.data?.[0]?.value ?? 'true') === 'true'),
+      aqlQuery(
+        q('preferences')
+          .filter({ id: `sync-note-formats-${acctId}` })
+          .select('value'),
+      ).then(data => data?.data?.[0]?.value),
+    ]);
 
   const mappings = customMappingsRaw
     ? mappingsFromString(customMappingsRaw)
     : defaultMappings;
 
   const categoryIds = new Set((await db.getCategories()).map(c => c.id));
+  const compiledNoteFormats = compileNoteFormats(
+    (() => {
+      try {
+        return noteFormatsRaw ? JSON.parse(String(noteFormatsRaw)) : [];
+      } catch {
+        return [];
+      }
+    })(),
+  );
+
   const normalized = [];
   for (const trans of transactions) {
     trans.cleared = Boolean(trans.booked);
@@ -545,8 +658,8 @@ async function normalizeBankSyncTransactions(transactions, acctId) {
 
     const mapping = mappings.get(trans.amount <= 0 ? 'payment' : 'deposit');
 
-    const date = trans[mapping.get('date')] ?? trans.date;
-    const payeeName = trans[mapping.get('payee')] ?? trans.payeeName;
+    let date = trans[mapping.get('date')] ?? trans.date;
+    let payeeName = trans[mapping.get('payee')] ?? trans.payeeName;
     const notes = trans[mapping.get('notes')];
 
     // Validate the date because we do some stuff with it. The db
@@ -562,6 +675,22 @@ async function normalizeBankSyncTransactions(transactions, acctId) {
     trans.imported_payee = trans.imported_payee || payeeName;
     if (trans.imported_payee) {
       trans.imported_payee = trans.imported_payee.trim();
+    }
+
+    let capturedNotes: string | undefined;
+    const formatMatch = applyNoteFormats(notes, date, compiledNoteFormats);
+    if (formatMatch) {
+      if (formatMatch.date) date = formatMatch.date;
+      if (formatMatch.payeeName) payeeName = formatMatch.payeeName;
+      if (formatMatch.imported_payee) {
+        trans.imported_payee = formatMatch.imported_payee;
+        if (!formatMatch.payeeName) payeeName = formatMatch.imported_payee;
+      }
+      if (formatMatch.amount) {
+        const parsed = looselyParseAmount(formatMatch.amount);
+        if (parsed !== null) trans.amount = parsed;
+      }
+      capturedNotes = formatMatch.notes;
     }
 
     let imported_id = trans.transactionId;
@@ -582,7 +711,11 @@ async function normalizeBankSyncTransactions(transactions, acctId) {
         payee: trans.payee,
         account: trans.account,
         date,
-        notes: importNotes && notes ? notes.trim().replace(/#/g, '##') : null,
+        notes: capturedNotes
+          ? capturedNotes.replace(/#/g, '##')
+          : importNotes && notes
+            ? notes.trim().replace(/#/g, '##')
+            : null,
         category: categoryIds.has(trans.category) ? trans.category : null,
         imported_id,
         imported_payee: trans.imported_payee,

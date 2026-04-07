@@ -15,6 +15,7 @@ import { useDispatch } from '#redux';
 
 import { BankSyncCheckboxOptions } from './BankSyncCheckboxOptions';
 import { FieldMapping } from './FieldMapping';
+import { NoteFormats } from './NoteFormats';
 import { useBankSyncAccountSettings } from './useBankSyncAccountSettings';
 
 export type TransactionDirection = 'payment' | 'deposit';
@@ -164,6 +165,8 @@ export function EditSyncAccount({ account }: EditSyncAccountProps) {
     setMapping,
     fields,
     saveSettings,
+    noteFormats,
+    setNoteFormats,
   } = useBankSyncAccountSettings(account.id);
 
   const onSave = async (close: () => void) => {
@@ -243,6 +246,24 @@ export function EditSyncAccount({ account }: EditSyncAccountProps) {
             setUpdateDates={setUpdateDates}
             helpMode="desktop"
           />
+
+          <Text style={{ fontSize: 15, margin: '1em 0 .5em 0' }}>
+            <Trans>Note formats</Trans>
+          </Text>
+          <Text
+            style={{
+              fontSize: 12,
+              color: theme.pageTextSubdued,
+              marginBottom: 8,
+            }}
+          >
+            <Trans>
+              Patterns are matched against the full note. Use placeholders like
+              %d%, %dd%, %m%, %mm%, %yy%, %yyyy%, %a%, %p%, %pp%, %n%. Click the
+              ? button for details.
+            </Trans>
+          </Text>
+          <NoteFormats formats={noteFormats} onChange={setNoteFormats} />
 
           <View
             style={{

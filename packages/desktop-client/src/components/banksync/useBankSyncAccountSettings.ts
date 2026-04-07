@@ -17,6 +17,8 @@ import type {
   TransactionDirection,
 } from './EditSyncAccount';
 
+export type NoteFormat = { id: string; pattern: string };
+
 export function useBankSyncAccountSettings(accountId: string) {
   const [savedMappings = mappingsToString(defaultMappings), setSavedMappings] =
     useSyncedPref(`custom-sync-mappings-${accountId}`);
@@ -34,6 +36,9 @@ export function useBankSyncAccountSettings(accountId: string) {
 
   const [savedUpdateDates = false, setSavedUpdateDates] = useSyncedPref(
     `sync-update-dates-${accountId}`,
+  );
+  const [savedNoteFormats = '[]', setSavedNoteFormats] = useSyncedPref(
+    `sync-note-formats-${accountId}`,
   );
 
   const [transactionDirection, setTransactionDirection] =
@@ -56,6 +61,13 @@ export function useBankSyncAccountSettings(accountId: string) {
   const [updateDates, setUpdateDates] = useState(
     String(savedUpdateDates) === 'true',
   );
+  const [noteFormats, setNoteFormats] = useState<NoteFormat[]>(() => {
+    try {
+      return JSON.parse(String(savedNoteFormats));
+    } catch {
+      return [];
+    }
+  });
 
   const transactionQuery = q('transactions')
     .filter({
@@ -92,6 +104,7 @@ export function useBankSyncAccountSettings(accountId: string) {
     setSavedReimportDeleted(String(reimportDeleted));
     setSavedImportTransactions(String(importTransactions));
     setSavedUpdateDates(String(updateDates));
+    setSavedNoteFormats(JSON.stringify(noteFormats));
   };
 
   const setMapping = (field: string, value: string) => {
@@ -125,5 +138,7 @@ export function useBankSyncAccountSettings(accountId: string) {
     exampleTransaction,
     fields,
     saveSettings,
+    noteFormats,
+    setNoteFormats,
   };
 }
