@@ -88,6 +88,7 @@ export type AccountHandlers = {
   'accounts-bank-sync': typeof accountsBankSync;
   'simplefin-batch-sync': typeof simpleFinBatchSync;
   'transactions-import': typeof importTransactions;
+  'transactions-reset-from-bank-data': typeof bankSync.resetTransactionsFromBankData;
   'account-unlink': typeof unlinkAccount;
 };
 
@@ -1804,4 +1805,5 @@ app.method('gocardless-create-web-token', createGoCardlessWebToken);
 app.method('accounts-bank-sync', accountsBankSync);
 app.method('simplefin-batch-sync', simpleFinBatchSync);
 app.method('transactions-import', mutator(undoable(importTransactions)));
+app.method('transactions-reset-from-bank-data', mutator(undoable(bankSync.resetTransactionsFromBankData)));
 app.method('account-unlink', mutator(unlinkAccount));

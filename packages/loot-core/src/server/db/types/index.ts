@@ -198,6 +198,7 @@ export type DbTransaction = {
   tombstone: 1 | 0;
   cleared: 1 | 0;
   reconciled: 1 | 0;
+  raw_synced_data?: string | null;
   // Unused in the codebase
   pending?: 1 | 0 | null;
   location?: string | null;

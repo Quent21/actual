@@ -720,59 +720,32 @@ class AccountInternal extends PureComponent<
     }, {});
   }
 
-  onRunRules = async (ids: string[]) => {
+  onReset = async (ids: string[]) => {
     try {
       this.setState({ workingHard: true });
-      // Bulk fetch transactions
-      const transactions = this.state.transactions.filter(trans =>
-        ids.includes(trans.id),
-      );
-      const changedTransactions: TransactionEntity[] = [];
-      const allErrors: string[] = [];
+      const { skipped } = await send('transactions-reset-from-bank-data', {
+        transactionIds: ids,
+      });
 
-      for (const transaction of transactions) {
-        const res: TransactionEntity | null = await send('rules-run', {
-          transaction,
-        });
-        if (res) {
-          changedTransactions.push(...ungroupTransaction(res));
-
-          // Collect formula errors
-          if (res._ruleErrors && res._ruleErrors.length > 0) {
-            allErrors.push(...res._ruleErrors);
-          }
-        }
-      }
-
-      // Show errors if any
-      if (allErrors.length > 0) {
+      if (skipped.length > 0) {
         this.props.dispatch(
           addNotification({
             notification: {
-              type: 'error',
-              message: `Formula errors in rules:\n${allErrors.join('\n')}`,
-              sticky: true,
+              type: 'warning',
+              message: `${skipped.length} transaction(s) were skipped because they have no bank data stored.`,
             },
           }),
         );
       }
 
-      // If we have changed transactions, update them in the database
-      if (changedTransactions.length > 0) {
-        await send('transactions-batch-update', {
-          updated: changedTransactions,
-        });
-      }
-
-      // Fetch updated transactions once at the end
       this.fetchTransactions();
     } catch (error) {
-      console.error('Error applying rules:', error);
+      console.error('Error resetting transactions:', error);
       this.props.dispatch(
         addNotification({
           notification: {
             type: 'error',
-            message: 'Failed to apply rules to transactions',
+            message: 'Failed to reset transactions',
           },
         }),
       );
@@ -1881,7 +1854,7 @@ class AccountInternal extends PureComponent<
                 onImport={this.onImport}
                 onBatchDelete={this.onBatchDelete}
                 onBatchDuplicate={this.onBatchDuplicate}
-                onRunRules={this.onRunRules}
+                onReset={this.onReset}
                 onBatchEdit={this.onBatchEdit}
                 onBatchLinkSchedule={this.onBatchLinkSchedule}
                 onBatchUnlinkSchedule={this.onBatchUnlinkSchedule}

@@ -604,7 +604,11 @@ function applyNoteFormats(
   return null;
 }
 
-async function normalizeBankSyncTransactions(transactions, acctId) {
+async function normalizeBankSyncTransactions(
+  transactions,
+  acctId,
+  { forceInclude = false }: { forceInclude?: boolean } = {},
+) {
   const payeesToCreate = new Map();
 
   const [customMappingsRaw, importPending, importNotes, noteFormatsRaw] =
@@ -650,7 +654,7 @@ async function normalizeBankSyncTransactions(transactions, acctId) {
   for (const trans of transactions) {
     trans.cleared = Boolean(trans.booked);
 
-    if (!importPending && !trans.cleared) continue;
+    if (!forceInclude && !importPending && !trans.cleared) continue;
 
     if (!trans.amount) {
       trans.amount = trans.transactionAmount.amount;
@@ -1473,4 +1477,89 @@ export async function simpleFinBatchSync(
   }
 
   return await Promise.all(promises);
+}
+
+export async function resetTransactionsFromBankData({
+  transactionIds,
+}: {
+  transactionIds: string[];
+}): Promise<{ updated: number; skipped: string[] }> {
+  const skipped: string[] = [];
+  const toUpdate: TransactionEntity[] = [];
+
+  const dbTransactions = (
+    await Promise.all(
+      transactionIds.map(id =>
+        db.first<db.DbTransaction>(
+          'SELECT id, acct, financial_id, raw_synced_data FROM transactions WHERE id = ? AND tombstone = 0',
+          [id],
+        ),
+      ),
+    )
+  ).filter(Boolean);
+
+  type Entry = {
+    id: string;
+    acct: string;
+    financial_id: string;
+    rawData: object;
+  };
+  const byAccount = new Map<string, Entry[]>();
+  for (const dbTrans of dbTransactions) {
+    if (!dbTrans.raw_synced_data) {
+      skipped.push(dbTrans.id);
+      continue;
+    }
+    try {
+      const rawData = JSON.parse(dbTrans.raw_synced_data);
+      // Clear the payee UUID baked in from original normalization so
+      // resolvePayee does a fresh name-based lookup, exactly as on first import.
+      // Without this, a stale/tombstoned UUID would be written back, blanking the payee.
+      delete rawData.payee;
+      if (!byAccount.has(dbTrans.acct)) byAccount.set(dbTrans.acct, []);
+      byAccount.get(dbTrans.acct)!.push({
+        id: dbTrans.id,
+        acct: dbTrans.acct,
+        financial_id: dbTrans.financial_id,
+        rawData,
+      });
+    } catch {
+      skipped.push(dbTrans.id);
+    }
+  }
+
+  const accounts: db.DbAccount[] = await db.getAccounts();
+  const accountsMap = new Map(accounts.map(a => [a.id, a]));
+
+  for (const [acctId, entries] of byAccount) {
+    const { normalized, payeesToCreate } = await normalizeBankSyncTransactions(
+      entries.map(e => e.rawData),
+      acctId,
+      { forceInclude: true },
+    );
+
+    await createNewPayees(
+      payeesToCreate,
+      normalized.map(n => n.trans),
+    );
+
+    for (const { trans: normalizedTrans } of normalized) {
+      const original = entries.find(
+        e => e.financial_id === normalizedTrans.imported_id,
+      );
+      if (!original) continue;
+
+      const withRules = await runRules(
+        { ...normalizedTrans, id: original.id },
+        accountsMap,
+      );
+      toUpdate.push(withRules);
+    }
+  }
+
+  if (toUpdate.length > 0) {
+    await batchUpdateTransactions({ updated: toUpdate });
+  }
+
+  return { updated: toUpdate.length, skipped };
 }

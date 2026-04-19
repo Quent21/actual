@@ -97,7 +97,7 @@ type AccountHeaderProps = {
   onMenuSelect: AccountMenuProps['onMenuSelect'];
   onReconcile: ComponentProps<typeof ReconcileMenu>['onReconcile'];
   onBatchEdit: ComponentProps<typeof SelectedTransactionsButton>['onEdit'];
-  onRunRules: ComponentProps<typeof SelectedTransactionsButton>['onRunRules'];
+  onReset: ComponentProps<typeof SelectedTransactionsButton>['onReset'];
   onBatchDelete: ComponentProps<typeof SelectedTransactionsButton>['onDelete'];
   onBatchDuplicate: ComponentProps<
     typeof SelectedTransactionsButton
@@ -176,7 +176,7 @@ export function AccountHeader({
   onDeleteFilter,
   onScheduleAction,
   onSetTransfer,
-  onRunRules,
+  onReset,
   onMakeAsSplitTransaction,
   onMakeAsNonSplitTransactions,
   onMergeTransactions,
@@ -389,7 +389,7 @@ export function AccountHeader({
               onDuplicate={onBatchDuplicate}
               onDelete={onBatchDelete}
               onEdit={onBatchEdit}
-              onRunRules={onRunRules}
+              onReset={onReset}
               onLinkSchedule={onBatchLinkSchedule}
               onUnlinkSchedule={onBatchUnlinkSchedule}
               onCreateRule={onCreateRule}
